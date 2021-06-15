@@ -1,0 +1,288 @@
+# Figure 2 Heatmap
+# Download genomic data from cBioPortal
+# Load clinical variables including TMB, site, molecular subtype
+# Load expression data
+# Generate plot with clinical variables followed by genomic alterations followed by polyamine expression data
+
+# Load libraries  -------------------------------------------------
+library(tibble)
+library(readr)
+library(data.table)
+library(dplyr)
+library(tidyverse) 
+library(gtools)
+library(ComplexHeatmap)
+library(circlize)
+library(ggsci)
+library(scales)
+library(colorRamps)
+
+# Define polyamine gene variables  -------------------------------------------------
+covariates.synthetic <- c("ODC1","SRM","SMS","AMD1","AZIN1","ARG1","ALDH18A1","SMOX","PAOX","PRODH","OAT")
+covariates.catabolic <- c("SAT1","OAZ1","OAZ2","OAZ3")
+covariates.transport <- c("SLC22A1","SLC22A2","SLC22A3","SLC47A1","SLC7A1","SLC7A2","SLC7A5","SLC7A6","SLC7A7","SLC7A8","SLC7A10","SLC7A11",
+                          "SLC3A2","SLC12A8","SLC22A16","SLC18B1","GPC1","ATP13A2")
+covariates.other <- c("OTC","MTAP","DHPS","DOHH")
+covariates <- c(covariates.synthetic,covariates.catabolic,covariates.transport,covariates.other)
+
+# Load HPV and T cell enrichment status variables --------------------------------------------------
+
+qualVars <- read_delim("~/HPVstatus_Tcell_MDSC_table/HPV_Tcell_MDSC_status_table.txt",
+                       delim = "\t",
+                       col_names = T,
+                       col_types = c("cffff")) %>%
+  dplyr::rename(SampleID = id) %>%
+  filter(HPV_Status == "HPV+") %>%
+  select(SampleID,HPV_Status,Tstatus) 
+
+samples <- qualVars$SampleID
+
+# Load DEseq2 VST normalized data (created by running DEseq2 on TCGA HNSC RSEM data) --------------------------------------------------
+
+TCGA_HNSC_DEseq2_norm <- fread("~/TCGA_data/TCGA_deseq2_vst_matrices/tcga_HNSC_vst_matrix_deseq2.txt",
+                               header = T,
+                               sep = "\t") %>%
+  column_to_rownames(var = "NAME")
+
+data <- as.data.frame(TCGA_HNSC_DEseq2_norm)
+
+# scale expression data --------------------------------------------------------------
+
+mat <- data.matrix(data)
+mat <- t(mat)
+mat.scale <- scale(mat)
+mat.scale <- t(mat.scale)
+mat.scale <- mat.scale[rownames(mat.scale) %in% covariates,]
+mat.scale <- mat.scale[,colnames(mat.scale) %in% samples]
+samples.new = colnames(mat.scale) 
+
+# load TCGA clinical variables -----------------
+
+TCGA_clinicalData <- read_delim("~/TCGA_data/TCGA_HNSC_survivalData.txt",
+                                delim = "\t",
+                                col_names = T) %>%
+  dplyr::rename(SampleID = bcr_patient_barcode) %>%
+  dplyr::mutate(SampleID = gsub("-","\\.",SampleID)) %>%
+  dplyr::mutate(Stage = as.factor(
+    ifelse( (clinical_stage == "Stage IVA" | clinical_stage == "Stage IVB" | clinical_stage == "Stage IVC"),
+            "Stage IV",
+            ifelse(clinical_stage == "Stage I","Stage I",
+                   ifelse(clinical_stage=="Stage II","Stage II",
+                          ifelse(clinical_stage=="Stage III","Stage III",NA))) )
+  ),
+  race = as.factor(
+    ifelse(race == "AMERICAN INDIAN OR ALASKA NATIVE","AmIndAKna",
+           ifelse(race == "ASIAN","ASIAN",
+                  ifelse(race == "BLACK OR AFRICAN AMERICAN","Black",
+                         ifelse(race == "WHITE","White",NA))))
+  ),
+  gender = as.factor(gender),
+  age = as.numeric(age_at_initial_pathologic_diagnosis),
+  Recurrence_metastasis = ifelse(is.na(new_tumor_event_dx_days_to),"No","Yes"),
+  Tumor_status = ifelse(tumor_status == "TUMOR FREE","Tumor_free","With_tumor")
+  ) %>%
+  dplyr::select(SampleID,Stage,Recurrence_metastasis,Tumor_status,OS)
+
+# load clinical data
+TCGA_HNSC_clinical <- read_delim("~/TCGA_data/hnsc_tcga/data_bcr_clinical_data_patient.txt",
+                                 delim = "\t",
+                                 skip = 4,
+                                 col_names = T) %>%
+  dplyr::rename(SampleID = PATIENT_ID) %>%
+  dplyr::mutate(SampleID = gsub("-","\\.",SampleID)) %>%
+  dplyr::mutate(TOBACCO_SMOKING_HISTORY_INDICATOR = ifelse(TOBACCO_SMOKING_HISTORY_INDICATOR == "[Not Available]", NA,TOBACCO_SMOKING_HISTORY_INDICATOR) ,
+                TOBACCO_SMOKING_HISTORY_INDICATOR = as.numeric(TOBACCO_SMOKING_HISTORY_INDICATOR)) %>%
+  dplyr::mutate(Smoking = ifelse(TOBACCO_SMOKING_HISTORY_INDICATOR == 1,"Non_smoker",
+                                 ifelse(TOBACCO_SMOKING_HISTORY_INDICATOR == 2, "Current_smoker","Other")),
+                Smoking = factor(Smoking, levels = c("Current_smoker","Non_smoker","Other"))) %>%
+  dplyr::mutate(
+    Site = as.factor(
+      ifelse( (PRIMARY_SITE_PATIENT == "Alveolar Ridge" | PRIMARY_SITE_PATIENT == "Buccal Mucosa" | PRIMARY_SITE_PATIENT == "Floor of mouth" |
+                 PRIMARY_SITE_PATIENT == "Hard Palate" | PRIMARY_SITE_PATIENT == "Lip" | PRIMARY_SITE_PATIENT == "Oral Cavity" |
+                 PRIMARY_SITE_PATIENT == "Oral Tongue"),
+              "Oral cavity",
+              ifelse( (PRIMARY_SITE_PATIENT == "Base of tongue" | PRIMARY_SITE_PATIENT == "Oropharynx" | PRIMARY_SITE_PATIENT == "Tonsil"),
+                      "Oropharynx",
+                      ifelse(PRIMARY_SITE_PATIENT == "Hypopharynx", "Hypopharynx",
+                             ifelse(PRIMARY_SITE_PATIENT == "Larynx", "Larynx", NA))))
+    )
+  ) %>%
+  dplyr::select(SampleID,Smoking,Site,PRIMARY_SITE_PATIENT)
+
+# load molecular subtype data ---------------------------------------------
+
+subtypeMolecular <- read_delim("~/TCGA_data/Molecular_subtype_TCGA_HNSC/HNSC_vst_matrix_deseq2.txt_group_allocation.txt",
+                               delim = "\t",
+                               col_names = T,
+                               col_types = c("cfdd")) %>%
+  dplyr::mutate(Group = factor(Group, levels = c("BA","CL","MS"),
+                               labels = c("Basal","Classical","Mesenchymal"))) %>%
+  dplyr::select(SampleID,Group)
+
+# load TMB data
+TMB.df <- read_delim("~/TCGA_TMB_MSI_tables/TCGA_TMB_cat.txt",
+                     delim = "\t",
+                     col_names = T) %>%
+  filter(SampleID %in% samples) %>%
+  dplyr::mutate(TMBcat_10 = factor(TMBcat_10,levels = c("TMBhi_10","TMBlo_10"),
+                                   labels = c("TMBhi","TMBlo"))) %>%
+  dplyr::select(SampleID,TMBcat_10)
+
+# Load cBioPortal genomic data ----------------------------------------------------
+
+mat.genomic = read.table("~/OneDrive - Johns Hopkins/Powell Lab/Project_ExpressionAnalysis/TCGA_HNSC_PIK3CA_MTOR_AKT_MYC_gain_amp_homdel_mut_cBioPortal.txt", 
+                         header = TRUE, stringsAsFactors = FALSE, sep = "\t")
+mat.genomic[is.na(mat.genomic)] = ""
+mat.genomic$SampleID <- gsub("-","\\.",mat.genomic$SampleID)
+mat.genomic <- mat.genomic[mat.genomic$SampleID %in% samples.new,] 
+rownames(mat.genomic) = mat.genomic[, 3]
+mat.genomic = mat.genomic[, -c(1:4)]
+mat.genomic = t(as.matrix(mat.genomic))
+mat.genomic = mat.genomic[,samples.new]
+
+# Define colors and alteration function for OncoPrint ----------------------------------------------------
+col = c("GAIN" = "firebrick1","AMP" = "firebrick4","MUT" = "#008000", "HOMDEL" = "blue")
+
+alter_fun = list(
+  background = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(2, "pt"), h-unit(2, "pt"), 
+              gp = gpar(fill = "#CCCCCC", col = NA))
+  },
+  # big blue
+  HOMDEL = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(2, "pt"), h-unit(2, "pt"), 
+              gp = gpar(fill = col["HOMDEL"], col = NA))
+  },
+  # big red
+  AMP = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(2, "pt"), h-unit(2, "pt"), 
+              gp = gpar(fill = col["AMP"], col = NA))
+  },
+  # big orange
+  GAIN = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(2, "pt"), h-unit(2, "pt"),
+              gp = gpar(fill = col["GAIN"], col = NA))
+  },
+  # small green
+  MUT = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(2, "pt"), h*0.33, 
+              gp = gpar(fill = col["MUT"], col = NA))
+  }
+)
+
+
+# load cell abundances generated with CIBERSORT ------------------------------------------
+cell.fracs <- read_delim("~/CIBERSORT/CIBERSORTx_Job18_output_TCGAHPVpos_TPM_nonzero_scPuramRef_limited_hiresMode/CIBERSORTxGEP_Job18_Fractions-Adjusted.txt",
+                         delim = "\t",
+                         col_names = T) %>%
+  dplyr::mutate(Mixture = gsub("-","\\.",Mixture)) %>%
+  dplyr::rename(SampleID = Mixture) %>%
+  as_tibble()
+  
+cell.fracs.mod <- cell.fracs %>%
+  dplyr::select(SampleID,"Fibroblast", "Macrophage","CD8") %>%
+  as_tibble()
+
+# Merge data frame --------------------------------------------------------
+
+df <- qualVars %>%
+  left_join(TCGA_clinicalData,by="SampleID") %>%
+  left_join(TCGA_HNSC_clinical,by="SampleID") %>%
+  left_join(TMB.df,by="SampleID") %>%
+  left_join(subtypeMolecular,by="SampleID") %>%
+  left_join(cell.fracs.mod,by="SampleID") %>%
+  mutate(OS = ifelse(OS==1,"Dead","Alive")) %>%
+  dplyr::rename("Overall survival" = "OS") %>%
+  arrange(match(SampleID, samples.new))
+
+
+# Create heatmap annotation --------------------------------------------------------
+
+mypalette <- blue2yellow(3)
+
+col.ha = list(`T status` = c("Thi"="#0073C2FF","Tlo"="#EFC000FF"),
+           `Stage` = c("Stage I"="#0073C2FF","Stage II"="#EFC000FF","Stage III"="#868686FF","Stage IV"="#CD534CFF","NA"="#3B3B3BFF"),
+           `Smoking` = c("Current_smoker"="red","Non_smoker"="black","Other"="#868686FF"),
+           `Site` = c("Hypopharynx"="pink","Larynx"="skyblue1","Oral cavity"="gold","Oropharynx" = "orange"),
+           `Recurrence/metastasis` = c("Yes"="#A73030FF","No"="#868686FF"),
+           `Tumor status` = c("With_tumor"="#A73030FF","Tumor_free"="#868686FF"),
+           `Overall survival` = c("Alive"="#868686FF","Dead"="#A73030FF"),
+           `TMB` = c("TMBhi"="#0073C2FF","TMBlo"="#EFC000FF","NA"="#868686FF"),
+           `Molecular subtype` = c("Classical"="red","Basal"="#003C67FF","Mesenchymal"="green")
+)
+
+ha <- HeatmapAnnotation(
+  `T status` = df$Tstatus,
+  `Stage` = df$Stage,
+  `Smoking` = df$Smoking,
+  `Site` = df$Site,
+  `Recurrence/metastasis` = df$Recurrence_metastasis,
+  `Overall survival` = df$`Overall survival`,
+  `Tumor status` = df$Tumor_status,
+  `TMB` = df$TMBcat_10,
+  `Molecular subtype` = df$Group,
+  col = col.ha,
+  # annotation_height = unit(1, "mm"),
+  simple_anno_size = unit(3, "mm"),
+  annotation_name_side = "left",
+  annotation_name_gp = gpar(cex=0.7)
+)
+
+# Define directory --------------------------------------------------------
+
+set.seed(389263)
+
+dir = c("~/Heatmap_Figure2/")
+dpi=600
+tiff(paste0(dir,"Figure2_heatmap_polyamine_informatics_paper.tif"),
+     width = 10*dpi,
+     height = 6.51*dpi,
+     type = "cairo",
+     compression = "lzw",
+     res = dpi,
+     family = "Helvetica")
+
+heatmap_legend_param = list(title = "Alterations", 
+                            at = c("HOMDEL", "AMP", "GAIN","MUT"), 
+                            labels = c("Deep deletion", "Amplification","Gain", "Mutation"))
+
+hm = Heatmap(mat.scale, 
+             name = "Z score", 
+             cluster_rows = T, cluster_columns = T,
+             clustering_distance_rows = "pearson",
+             clustering_method_rows = "ward.D",
+             clustering_distance_columns = "pearson",
+             clustering_method_columns = "ward.D",
+             top_annotation = ha, 
+             height = unit(80,"mm"),
+             show_row_names = T, show_column_names = FALSE,
+             row_title_side = "left", row_names_side = "right",
+             row_names_gp = gpar(cex=0.6,fontface = "italic"),
+             col = colorRamp2(c(-2, 0, 2), mypalette),
+             row_km = 2,
+             column_km = 3
+) %v%
+    oncoPrint(mat.genomic,
+              alter_fun = alter_fun, col = col, 
+              heatmap_legend_param = heatmap_legend_param,
+              top_annotation = NULL,
+              right_annotation = NULL,
+              row_names_gp = gpar(fontface = "italic",cex=0.6),
+              height = unit(25,"mm"))
+hm = draw(hm)
+
+dev.off()
+
+
+col_idx <- column_order(hm)
+
+cluster3 <- colnames(mat.scale[,col_idx$`3`])
+cluster2 <- colnames(mat.scale[,col_idx$`2`])
+cluster1 <- colnames(mat.scale[,col_idx$`1`])
+
+df.all <- df %>%
+  dplyr::mutate(Cluster = ifelse(SampleID %in% cluster3,"Cluster3",
+                                 ifelse(SampleID %in% cluster2, "Cluster2","Cluster1"))) %>%
+  write_delim("~/Heatmap_Figure2/Clusters_heatmap_derived_TCGA_HPVpos_HNSC.txt",
+              delim = "\t",
+              col_names = T)

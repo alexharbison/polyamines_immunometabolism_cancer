@@ -1,0 +1,72 @@
+# Generate bubble plots of cox regression results across TCGA Thi tumors using polyamine ssGSEA scores 
+library(dplyr)
+library(readr)
+library(tidyr)
+library(ggpubr)
+library(tibble)
+library(scales)
+library(ggsci)
+
+# Read data set -----------------------------------------------------------
+fileName <- "~/TCGA_CoxRegRes_Polyamines_Table/TCGA_Thi_tumors_coxRegRes_OS_3yrCensor_polyamines_extended_ssGSEA_scores_CATEGORICAL_table_210519.txt"
+
+data <- read_delim(fileName,
+                   delim = "\t",
+                   col_names = T) %>%
+  arrange(p.value.gene) %>%
+  dplyr::rename(HR =  HR.geneCoef,
+                p = p.value.gene) %>%
+  mutate(`-log2 p-value` = -log2(p.adj.log),
+         significant = factor(ifelse(`-log2 p-value` > 2,"Significant","NS")),
+         TumorType = factor(TumorType,
+                            levels = c("HNSC-HPVneg","HNSC-HPVpos","CESC-HPVpos",
+                                       "THCA","SKCM","PRAD","LUSC","LUAD","KIRC","HNSC","CESC","BRCA","BLCA"),
+                            labels = c("HNSC_HPVneg_Thi","HNSC_HPVpos_Thi","CESC_HPVpos_Thi",
+                                       "THCA_Thi","SKCM_Thi","PRAD_Thi","LUSC_Thi","LUAD_Thi",
+                                       "KIRC_Thi","HNSC_Thi","CESC_Thi","BRCA_Thi","BLCA_Thi")),
+         gene = factor(gene,levels = c("Polyamine_synthesis","Polyamine_catabolism","Polyamine_transport","Polyamine_combined"),
+                       labels = c("Synthesis","Catabolism","Transport","Combined"))) %>%
+  filter(!TumorType == "THCA_Thi") %>%
+  filter(!is.na(gene))
+
+# Bubble plots ------------------------------------------------------------
+workingDir <- c("~/Pan_TCGA_coxReg_polyamine_plots/")
+dpi=600
+
+# bubble plot hazard ratio log10 p values associated with polyamine groups --------
+date = "_210519"
+pathway = "groups_ssGSEA_CATEGORICAL_data"
+
+tiff(paste0(workingDir,
+            "Pan_TCGA_Thi_coxRegRes_polyamine_",pathway,date,".tif"),
+     width = 5*dpi,
+     height = 6*dpi,
+     type = "cairo",
+     compression = "lzw",
+     res = dpi,
+     family = "Helvetica")
+
+p <- ggplot(data,
+            aes(x = gene, y = TumorType, shape = significant)) 
+
+p +  geom_point(aes(size = `-log2 p-value`,fill = HR), alpha = 1) +
+  scale_fill_gradient2(low = "#0073C2FF", mid = "#7AA6DCFF", high = "#EFC000FF", midpoint = 0,limits=c(-1.5,1.5),oob=squish) +
+  scale_shape_manual(values = c(21, 23)) +
+  scale_size_continuous(range=c(0,10)) +
+  theme_classic() +
+  geom_hline(yintercept=3.5, linetype="dashed",
+             color = "grey50", size=1) +
+  ggtitle("Survival across TCGA Thi datasets\nby polyamine group expression") +
+  xlab("") + ylab("") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,face = "plain",color = "black",size = 14),
+        axis.text.y = element_text(face = "plain",color = "black",size = 12),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        legend.position = "right",
+        legend.text = element_text(size = 10)) +
+  labs(fill = "log2 HR",
+       shape = "Significance") +
+  guides(gene = FALSE)
+
+dev.off()
+
+
