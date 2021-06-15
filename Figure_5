@@ -1,0 +1,253 @@
+# Polyamine gene module analysis of Cillo et al scRNAseq data
+
+# load libraries ----------------------------------------------------------
+library(dplyr)
+library(Seurat)
+library(SeuratDisk)
+library(patchwork)
+library(qusage)
+library(sctransform)
+library(glmGamPoi)
+library(singleseqgset)
+library(heatmap3)
+library(ComplexHeatmap)
+library(circlize)
+library(tibble) 
+library(rstatix)
+library(readr)
+
+# Load HPVpos TIL SCT data --------------------------------------------
+
+experiment.aggregate.TIL.sct <- readRDS("~/GSE139324/experiment.aggregate.sct.mapping.TIL.HPVpos.rds")
+
+# Rename cluster IDs
+new.cluster.ids <- c("CD4 Naive", "CD8 TEM", "CD4 TCM","B cell","B cell","Treg","dnT","gdT","CD4 TEM","Other",
+                     "CD4 Proliferating","DC","B cell","NK","NK Proliferating","CD14 mono","DC","Other",
+                     "CD8 TCM","DC","CD8 Naive","NK_CD56bright","DC","Other","CD8 Proliferating",
+                     "Other","CD4 CTL","Other","CD16 mono","Other")
+names(new.cluster.ids) <- levels(experiment.aggregate.TIL.sct)
+experiment.aggregate.TIL.sct <- RenameIdents(experiment.aggregate.TIL.sct, new.cluster.ids)
+
+# Subset cell types -------------------------------------------------
+
+experiment.aggregate.TIL.sct.subset <- subset(experiment.aggregate.TIL.sct, idents = c("CD4 Naive", "CD8 TEM", "CD4 TCM","Treg","CD4 TEM",
+                                                                                       "DC","NK","CD14 mono",
+                                                                                       "CD8 TCM","CD8 Naive","NK_CD56bright",
+                                                                                       "CD4 CTL","CD16 mono"))
+
+# reorder cell types ------------------------------------------------------
+
+experiment.aggregate.TIL.sct.subset@active.ident <- factor(experiment.aggregate.TIL.sct.subset@active.ident, 
+                                                        levels=c("CD4 Naive",
+                                                                 "CD4 TCM",
+                                                                 "CD4 TEM",
+                                                                 "CD4 CTL",
+                                                                 "Treg",
+                                                                 "CD8 Naive",
+                                                                 "CD8 TCM",
+                                                                 "CD8 TEM",
+                                                                 "NK",
+                                                                 "NK_CD56bright",
+                                                                 "CD14 mono",
+                                                                 "CD16 mono",
+                                                                 "DC"
+                                                                 ))
+
+# Add polyamine module scores --------------------------------------------------------
+covariates.synthetic <- c("ODC1","SRM","SMS","AMD1","AZIN1","ARG1","ALDH18A1","SMOX","PAOX","PRODH","OAT")
+covariates.catabolic <- c("SAT1","OAZ1","OAZ2","OAZ3")
+covariates.transport <- c("SLC22A1","SLC22A2","SLC22A3","SLC47A1","SLC7A1","SLC7A2","SLC7A5","SLC7A6","SLC7A7","SLC7A8","SLC7A10","SLC7A11",
+                          "SLC3A2","SLC12A8","SLC22A16","SLC18B1","GPC1","ATP13A2")
+covariates.other <- c("OTC","MTAP","DHPS","DOHH")
+covariates.combined <- c("ALDH18A1",	"GPC1",	"OAZ2",	"ODC1",	"SLC7A2",	"SMOX",	"AMD1",	"SLC3A2",	"SLC7A1",	"SMS",	"PRODH",	"OAT")
+covariate <- c(covariates.synthetic,covariates.catabolic,covariates.transport,covariates.other)
+
+polyamine_synthesis <- list(c("ODC1","SRM","SMS","AMD1","AZIN1","ARG1","ALDH18A1","SMOX","PAOX","PRODH","OAT"))
+polyamine_catabolism <- list(c("SAT1","OAZ1","OAZ2","OAZ3"))
+polyamine_transport <- list(c("SLC22A1","SLC22A2","SLC22A3","SLC47A1","SLC7A1","SLC7A2","SLC7A5","SLC7A6","SLC7A7","SLC7A8","SLC7A10","SLC7A11",
+                              "SLC3A2","SLC12A8","SLC22A16","SLC18B1","GPC1","ATP13A2"))
+polyamines_combined <- list(c("ALDH18A1",	"GPC1",	"OAZ2",	"ODC1",	"SLC7A2",	"SMOX",	"AMD1",	"SLC3A2",	"SLC7A1",	"SMS",	"PRODH",	"OAT"))
+
+# synthesis module
+experiment.aggregate.TIL.sct.subset <- AddModuleScore(
+  object = experiment.aggregate.TIL.sct.subset,
+  features = polyamine_synthesis,
+  assay = "SCT",
+  ctrl = 5,
+  name = 'Polyamine_synthesis'
+)
+
+# catabolism module
+experiment.aggregate.TIL.sct.subset <- AddModuleScore(
+  object = experiment.aggregate.TIL.sct.subset,
+  features = polyamine_catabolism,
+  assay = "SCT",
+  ctrl = 5,
+  name = 'Polyamine_catabolism'
+)
+
+# transport module
+experiment.aggregate.TIL.sct.subset <- AddModuleScore(
+  object = experiment.aggregate.TIL.sct.subset,
+  features = polyamine_transport,
+  assay = "SCT",
+  ctrl = 5,
+  name = 'Polyamine_transport'
+)
+
+# combined module
+experiment.aggregate.TIL.sct.subset <- AddModuleScore(
+  object = experiment.aggregate.TIL.sct.subset,
+  features = polyamines_combined,
+  assay = "SCT",
+  ctrl = 5,
+  name = 'Polyamine_combined'
+)
+
+
+# Differential expression polyamine genes ------------------------------------------------------------------
+experiment.aggregate.TIL.sct.subset.markers <- FindAllMarkers(experiment.aggregate.TIL.sct.subset, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+experiment.aggregate.TIL.sct.subset.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+top10 <- experiment.aggregate.TIL.sct.subset.markers %>% group_by(cluster) %>% 
+  dplyr::filter(p_val_adj < 0.25 & avg_log2FC > 0.25) %>%
+  filter(gene %in% covariate) %>%
+  write_delim("~/scRNAseqAnalysis_VignalliData/DEGs.polyamine.genes.210519.txt",
+              delim = "\t",
+              col_names = T)
+
+# Polyamine module expression comparison
+experiment.aggregate.TIL.sct.subset[["new.ident"]] <- Idents(object = experiment.aggregate.TIL.sct.subset)
+
+experiment.aggregate.TIL.sct.subset.module.expression.dat <- experiment.aggregate.TIL.sct.subset@meta.data %>%
+  dplyr::select(new.ident,Polyamine_synthesis1,Polyamine_catabolism1,Polyamine_transport1,Polyamine_combined1)
+
+wilcox.test.polyamine.modules <- experiment.aggregate.TIL.sct.subset.module.expression.dat %>% 
+  select(Polyamine_synthesis1:Polyamine_combined1,new.ident) %>%
+  gather(module, expression, -new.ident) %>%
+  group_by(module) %>%
+  wilcox_test(expression ~ new.ident,alternative = "two.sided",p.adjust.method ="fdr") %>%
+  add_significance() %>%
+  arrange(p) %>%
+  write_excel_csv("~/scRNAseqAnalysis_VignalliData/wilcox.test.polyamine.modules.results.210519.csv", na="") 
+
+experiment.aggregate.TIL.sct.subset.module.expression.dat %>%
+  select(Polyamine_synthesis1:Polyamine_combined1,new.ident) %>%
+  gather(module, expression, -new.ident) %>%
+  group_by(module,new.ident) %>%
+  get_summary_stats(expression, type = "median_iqr") %>%
+  write_excel_csv("~/scRNAseqAnalysis_VignalliData/summary.stats.polyamine.modules.results.210519.csv", na="") 
+
+
+
+# UMAP dim plot -------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/UMAP.dim.plot.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif",
+     width = 8*dpi,
+     height = 8*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+DimPlot(experiment.aggregate.TIL.sct.subset, reduction = "ref.umap", label = TRUE, pt.size = 0.5) + NoLegend()
+
+dev.off()
+
+# UMAP with polyamine synthesis score -------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/UMAP.dim.plot.polyamine.synthesis.module.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif",   
+     width = 8*dpi,
+     height = 8*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+FeaturePlot(object = experiment.aggregate.TIL.sct.subset,reduction = "ref.umap", label = T,features = "Polyamine_synthesis1")
+
+dev.off()
+
+
+# UMAP with polyamine catabolism score -------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/UMAP.dim.plot.polyamine.catabolism.module.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif",
+     width = 8*dpi,
+     height = 8*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+FeaturePlot(object = experiment.aggregate.TIL.sct.subset,reduction = "ref.umap", label = T,features = "Polyamine_catabolism1")
+
+dev.off()
+
+# UMAP with polyamine transport score -------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/UMAP.dim.plot.polyamine.transport.module.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif",
+     width = 8*dpi,
+     height = 8*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+FeaturePlot(object = experiment.aggregate.TIL.sct.subset,reduction = "ref.umap", label = T,features = "Polyamine_transport1")
+
+dev.off()
+
+# UMAP with polyamine combined score -------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/UMAP.dim.plot.polyamine.combined.module.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif",
+     width = 8*dpi,
+     height = 8*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+FeaturePlot(object = experiment.aggregate.TIL.sct.subset,reduction = "ref.umap", label = T,features = "Polyamine_combined1")
+
+dev.off()
+
+# Bubble/dot plot polyamine genes -------------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/Bubble.plot.polyamines.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif", 
+     width = 12*dpi,
+     height = 4.5*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+DotPlot(experiment.aggregate.TIL.sct.subset,assay = "SCT", features = covariate,scale = T,
+        # group.by = "celltype",
+        cols = c("#0073C2FF","#EFC000FF")) +
+  RotatedAxis() + xlab("") + ylab("") + ggtitle("HPV+ HNSC TILs")
+
+dev.off()
+
+# Bubble/dot plot polyamine modules -------------------------------------------------------------
+dpi=350
+tiff("~/scRNAseqAnalysis_VignalliData/Bubble.plot.polyamine.modules.TILs.HPVpos.refMapping.scRNAseq.Vignali.210519.tif", 
+     width = 5*dpi,
+     height = 6*dpi,
+     res = dpi,
+     pointsize = 12,
+     family = "Helvetica",
+     type = "cairo",
+     compression = "lzw")
+
+DotPlot(experiment.aggregate.TIL.sct.subset,assay = "SCT", features =c("Polyamine_synthesis1",'Polyamine_catabolism1','Polyamine_transport1',"Polyamine_combined1"),scale = T,
+        # group.by = "celltype",
+        cols = c("#0073C2FF","#EFC000FF")) +
+  RotatedAxis() + xlab("") + ylab("") + ggtitle("HPV+ HNSC TILs")
+
+dev.off()
+
