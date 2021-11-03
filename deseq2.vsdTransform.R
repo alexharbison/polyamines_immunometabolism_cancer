@@ -21,10 +21,9 @@ dds = DESeqDataSetFromMatrix(countData=countData, colData=colData, design = ~1)
 # Generate variance stabilized normalized matrix and write to file
 vsd <- vst(dds, blind=FALSE)
 vsd.df <- assay(vsd)
-vsd.df.new = data.frame("id"=rownames(vsd.df),vsd.df)
+vsd.df.deseq2 = data.frame("id"=rownames(vsd.df),vsd.df)
+vsd.df.ssGSEA = data.frame("NAME"=rownames(vsd.df),"DESCRIPTION"="na",vsd.df)
 
-write.table(vsd.df.new, file=paste0(args,"_","vst_matrix_deseq2.txt"), sep="\t",  row.name=FALSE, col.names=TRUE,quote=FALSE)
+write.table(vsd.df.deseq2, file=paste0(args,"_","vst_matrix_deseq2.txt"), sep="\t",  row.name=FALSE, col.names=TRUE,quote=FALSE)
 
-
-
-
+write.table(vsd.df.ssGSEA, file=paste0(args,"_","vst_matrix_ssGSEA_ready_deseq2.gct"), sep="\t", row.name=FALSE, col.names=TRUE,quote=FALSE)
