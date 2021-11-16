@@ -8,7 +8,7 @@ library(scales)
 library(ggsci)
 
 # Read data set -----------------------------------------------------------
-fileName <- "~/TCGA_CoxRegRes_Polyamines_Table/TCGA_Thi_tumors_coxRegRes_OS_3yrCensor_polyamines_extended_ssGSEA_scores_CATEGORICAL_table_210519.txt"
+fileName <- "~/filename.txt"
 
 data <- read_delim(fileName,
                    delim = "\t",
@@ -30,12 +30,12 @@ data <- read_delim(fileName,
   filter(!is.na(gene))
 
 # Bubble plots ------------------------------------------------------------
-workingDir <- c("~/Pan_TCGA_coxReg_polyamine_plots/")
+workingDir <- c("~/figureDirectory")
 dpi=600
 
 # bubble plot hazard ratio log10 p values associated with polyamine groups --------
 date = "_210519"
-pathway = "groups_ssGSEA_CATEGORICAL_data"
+pathway = "groups_ssGSEA_CONTINUOUS_data"
 
 tiff(paste0(workingDir,
             "Pan_TCGA_Thi_coxRegRes_polyamine_",pathway,date,".tif"),
